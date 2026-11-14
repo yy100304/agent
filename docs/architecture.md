@@ -213,13 +213,40 @@ VectorStore 封装接口，Chroma ↔ FAISS 可切换。
     → Agent 读取错题分布 → 生成针对性建议 / 调整学习计划
 ```
 
-## 10. 开发阶段计划
+## 10. Multi-Agent Harness 平台层（v3）
+
+对标主流 Agent Harness 框架的六项能力，全部在 `app/agents/` 实现：
+
+```
+用户消息 → Dispatcher（LLM分类 + 规则路由双通道）
+        → 路由表 ROUTES → WorkflowExecutor
+        → 子Agent（tutor/coach/notes/orchestrator，AgentRegistry 声明式注册）
+        → 工具层（rag/knowledge_base.py 检索增强）
+        → Validator（规则结构校验 + LLM质量评分）
+        → 不通过 → Self-Loop（反馈注入重试，上限 max_retries）
+        → 最终输出 + 执行轨迹落库 agent_runs
+```
+
+| 模块 | 文件 | 职责 |
+|---|---|---|
+| 团队定义 | `agents/registry.py` | AgentProfile 声明式注册（提示词/工具/重试策略） |
+| 动态调度 | `agents/dispatcher.py` | 5 类标签封闭集合，S1~S6 顺序判定，双通道降级 |
+| 工作流编排 | `agents/executor.py` | 路由表 + 多任务拆解排序 + 逐项调度汇总 |
+| 自我循环 | `agents/executor.py` | validate→feedback→retry，轮数与反馈实时可见 |
+| 结果验证 | `agents/validator.py` | 规则层（长度/结构关键词）+ LLM 层（质量分） |
+| 知识库集成 | `rag/knowledge_base.py` | 结构化学科文档 + 加权检索，工具化调用 |
+
+**SSE 事件流**：`status → dispatch → plan → agent_start → tool → validate → retry → final → done`，
+前端 Agent 页面左侧对话、右侧实时轨迹面板 + 团队面板 + 运行记录。
+
+**三级稳定性降级**：LLM 可用（完整智能）→ 无 Key（规则路由 + 知识库模板，链路完整）→ 异常（兜底提示）。
+
+## 11. 开发阶段计划
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | 一 | 骨架 + 登录注册 + Dashboard | ✅ 完成 |
-| 二 | 数据层重构：8 张表 + LLMService（降级）+ 题库 + 批改 + 错题集 + 练习闭环 + 演示种子数据 | ✅ 完成 |
-| 三 | StudyAgent + /api/chat（SSE）+ 5 Tools 注册 | 待开发 |
-| 四 | RAG（上传、切分、Embedding、Chroma、检索问答） | 待开发 |
+| 二 | 数据层 + 题库 + 批改 + 错题集闭环 | ✅ 完成 |
+| 三 | Multi-Agent Harness 平台（本阶段） | ✅ 完成 |
+| 四 | 知识库页面 + 真实 RAG（Embedding/Chroma/上传） | 待开发 |
 | 五 | 学习计划页 + Agent 自动调整计划 | 待开发 |
-| 六 | 知识库页面 + Dashboard 打磨 | 待开发 |

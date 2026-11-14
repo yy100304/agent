@@ -153,6 +153,20 @@ class LearningService:
         correct = sum(1 for (c,) in rows if c)
         return round(correct / len(rows), 4)
 
+    @staticmethod
+    def _as_date(value) -> date:
+        """把数据库返回的日期统一成 datetime.date.
+
+        SQLite 的 func.date() 返回字符串（如 '2026-11-14'），MySQL 可能返回
+        date/datetime。统一转换后，避免字符串与 date 混作字典键导致查不到，
+        进而使趋势/总时长恒为 0。
+        """
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        return date.fromisoformat(str(value)[:10])
+
     def accuracy_by_day(self, user_id: int, days: int = 7) -> Dict[date, Optional[float]]:
         """最近 N 天每日正确率（无答题的日期为 None）."""
         start = date.today() - timedelta(days=days - 1)
@@ -169,7 +183,7 @@ class LearningService:
         )
         grouped: Dict[date, List[bool]] = {}
         for d, correct in rows:
-            grouped.setdefault(d, []).append(bool(correct))
+            grouped.setdefault(self._as_date(d), []).append(bool(correct))
         return {
             start + timedelta(days=i): (
                 round(sum(v) / len(v), 4) if (v := grouped.get(start + timedelta(days=i))) else None
@@ -191,7 +205,7 @@ class LearningService:
             .group_by("d")
             .all()
         )
-        mapping = {d: int(m or 0) for d, m in rows}
+        mapping = {self._as_date(d): int(m or 0) for d, m in rows}
         return {
             start + timedelta(days=i): mapping.get(start + timedelta(days=i), 0)
             for i in range(days)

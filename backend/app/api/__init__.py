@@ -2,6 +2,7 @@
 from fastapi import APIRouter
 
 from app.api import (
+    agent,
     auth,
     dashboard,
     knowledge_points,
@@ -21,5 +22,6 @@ api_router.include_router(questions.router, prefix="/questions", tags=["question
 api_router.include_router(wrong_questions.router, prefix="/wrong-questions", tags=["wrong-questions"])
 api_router.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
 api_router.include_router(study_plans.router, prefix="/study-plans", tags=["study-plans"])
+api_router.include_router(agent.router, prefix="/agent", tags=["agent"])
 
 __all__ = ["api_router"]

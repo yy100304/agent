@@ -32,7 +32,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'agent',
         name: 'Agent',
-        component: () => import('@/views/Placeholder.vue'),
+        component: () => import('@/views/Agent.vue'),
         meta: { title: 'AI Agent', icon: 'ChatLineRound' },
       },
       {
