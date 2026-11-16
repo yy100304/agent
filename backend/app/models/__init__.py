@@ -5,6 +5,8 @@ from app.models.study_plan import StudyPlan, StudyTask
 from app.models.question import Question
 from app.models.answer import Answer, WrongQuestion
 from app.models.learning import LearningProfile, LearningRecord
+from app.models.knowledge_doc import KnowledgeDocument
+from app.models.subject import Subject
 from app.models.agent import AgentMessage, AgentRun
 from app.models.workflow import (
     AgentEvaluation,
@@ -24,6 +26,8 @@ __all__ = [
     "WrongQuestion",
     "LearningRecord",
     "LearningProfile",
+    "KnowledgeDocument",
+    "Subject",
     "AgentRun",
     "AgentMessage",
     # ---- 新 Multi-Agent 体系（第二阶段新增表）----

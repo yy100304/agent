@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { ElMessage } from 'element-plus'
 import {
   ChatLineRound,
   Calendar,
@@ -8,18 +9,60 @@ import {
   DataAnalysis,
   EditPen,
   Files,
+  List,
 } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
+import { useSubjectStore } from '@/stores/subject'
 
 const router = useRouter()
 const route = useRoute()
 const userStore = useUserStore()
+const subjectStore = useSubjectStore()
 
-// 固定导航：学习看板 / AI Agent / 学习计划 / 练习 / 错题集 / 知识库
+const showSubject = computed(() => route.name !== 'Agent')
+const addVisible = ref(false)
+const newSubject = ref('')
+const adding = ref(false)
+
+const subjectValue = computed<string>({
+  get: () => subjectStore.current,
+  set: (value: string) => {
+    if (value === '__add__') {
+      addVisible.value = true
+      return
+    }
+    subjectStore.setCurrent(value)
+  },
+})
+
+async function onAddSubject() {
+  const name = newSubject.value.trim()
+  if (!name || adding.value) return
+  adding.value = true
+  try {
+    await subjectStore.add(name)
+    ElMessage.success(`已添加科目「${name}」`)
+    addVisible.value = false
+    newSubject.value = ''
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    adding.value = false
+  }
+}
+
+onMounted(() => {
+  subjectStore.load().catch(() => {
+    /* 科目加载失败不影响主流程 */
+  })
+})
+
+// 固定导航：学习看板 / AI Agent / 任务轨迹 / 学习计划 / 练习 / 错题集 / 知识库
 // 注意：登录后不出现任何"登录/注册"入口，仅保留"退出登录"
 const menus = [
   { name: 'Dashboard', path: '/dashboard', title: '学习看板', icon: DataAnalysis },
-  { name: 'Agent', path: '/agent', title: 'AI Agent', icon: ChatLineRound },
+  { name: 'Agent', path: '/agent', title: '学习小助手', icon: ChatLineRound },
+  { name: 'AgentTasks', path: '/agent-tasks', title: '任务轨迹', icon: List },
   { name: 'StudyPlan', path: '/study-plan', title: '学习计划', icon: Calendar },
   { name: 'Practice', path: '/practice', title: '练习', icon: EditPen },
   { name: 'WrongQuestions', path: '/wrong-questions', title: '错题集', icon: Collection },
@@ -76,9 +119,51 @@ function handleLogout() {
           <span class="page-title">{{ (route.meta?.title as string) || '智学 Agent' }}</span>
         </div>
         <div class="topbar-right">
-          <span class="topbar-hint">让 AI 主动执行学习任务</span>
+          <template v-if="showSubject">
+            <span class="subject-text">科目</span>
+            <el-select
+              v-model="subjectValue"
+              size="small"
+              class="subject-select"
+              :loading="subjectStore.loading"
+              placeholder="选择科目"
+            >
+              <el-option
+                v-for="item in subjectStore.list"
+                :key="item.name"
+                :label="item.name"
+                :value="item.name"
+              >
+                <span class="opt-name">{{ item.name }}</span>
+                <span class="opt-meta">
+                  {{ item.knowledge_points }} 知识点 · {{ item.documents }} 资料
+                </span>
+              </el-option>
+              <el-option label="＋ 新建科目" value="__add__" />
+            </el-select>
+          </template>
+          <span class="topbar-hint">一句话说清目标，剩下的小助手来跑</span>
         </div>
       </header>
+
+      <el-dialog v-model="addVisible" title="新建科目" width="380px">
+        <el-input
+          v-model="newSubject"
+          placeholder="例如：概率论 / 操作系统 / 考研英语"
+          maxlength="20"
+          show-word-limit
+          @keyup.enter="onAddSubject"
+        />
+        <p class="dialog-tip">
+          新增科目后可在顶部切换；计划、练习、错题、知识库会按该科目归集。
+        </p>
+        <template #footer>
+          <el-button @click="addVisible = false">取消</el-button>
+          <el-button type="primary" :loading="adding" :disabled="!newSubject.trim()" @click="onAddSubject">
+            添加
+          </el-button>
+        </template>
+      </el-dialog>
 
       <main class="content">
         <router-view v-slot="{ Component }">
@@ -247,6 +332,33 @@ function handleLogout() {
 .topbar-hint {
   font-size: 12px;
   color: $text-placeholder;
+}
+
+.subject-text {
+  font-size: 12px;
+  color: $text-placeholder;
+}
+
+.subject-select {
+  width: 168px;
+}
+
+.opt-name {
+  float: left;
+}
+
+.opt-meta {
+  float: right;
+  font-size: 11px;
+  color: $text-placeholder;
+  margin-left: 12px;
+}
+
+.dialog-tip {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: $text-placeholder;
+  line-height: 1.7;
 }
 
 .content {

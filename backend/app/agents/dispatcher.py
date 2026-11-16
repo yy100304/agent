@@ -53,7 +53,16 @@ class Dispatcher:
     """主调度器：先走 LLM 通道，失败/超时/标签非法自动降级规则通道."""
 
     def dispatch(self, message: str, history: Optional[list] = None) -> DispatchResult:
-        # ---- 通道 1：LLM 意图分类 ----
+        """规则优先，识别不出来的再用 LLM 兜底.
+
+        关键词命中已经足够可靠，先走规则可以省掉一次完整的模型往返
+        （实测每次约 3~5s），只有规则判不出学习意图时才请求 LLM。
+        """
+        rule = self._rule_dispatch(message)
+        if rule.label != "non_learning":
+            return rule
+
+        # ---- LLM 兜底通道：规则没识别出学习意图时再问模型 ----
         if llm_service.available:
             result = llm_service.structured_output(
                 [
@@ -70,10 +79,9 @@ class Dispatcher:
                     reason=result.reason or "LLM 意图识别",
                     channel="llm",
                 )
-            logger.warning("Dispatcher LLM 通道失败，降级为规则路由")
+            logger.warning("Dispatcher LLM 通道失败，保留规则路由结果")
 
-        # ---- 通道 2：关键词规则路由（固定顺序保证可复现） ----
-        return self._rule_dispatch(message)
+        return rule
 
     # ---- 规则通道 ----
 

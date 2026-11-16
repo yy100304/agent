@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount, ref } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import * as echarts from 'echarts'
 import { ElMessage } from 'element-plus'
@@ -10,8 +10,11 @@ import {
   getDashboard,
   type DashboardSummary,
 } from '@/api/dashboard'
+import SubjectBadge from '@/components/SubjectBadge.vue'
+import { useSubjectStore } from '@/stores/subject'
 
 const router = useRouter()
+const subjectStore = useSubjectStore()
 const loading = ref(false)
 const completing = ref<number | null>(null)
 const data = ref<DashboardSummary | null>(null)
@@ -148,7 +151,7 @@ function renderCharts() {
 async function loadDashboard() {
   loading.value = true
   try {
-    data.value = await getDashboard()
+    data.value = await getDashboard(subjectStore.current || undefined)
     await new Promise((r) => requestAnimationFrame(r))
     renderCharts()
   } catch (e) {
@@ -162,6 +165,11 @@ function onResize() {
   studyTimeChart?.resize()
   accuracyChart?.resize()
 }
+
+watch(
+  () => subjectStore.current,
+  () => loadDashboard(),
+)
 
 onMounted(() => {
   loadDashboard()
@@ -180,7 +188,10 @@ onBeforeUnmount(() => {
     <!-- ===== 欢迎区 ===== -->
     <section class="hero card">
       <div class="hero-text">
-        <div class="greeting">{{ data?.greeting || '欢迎回来' }}</div>
+        <div class="greeting-row">
+          <div class="greeting">{{ data?.greeting || '欢迎回来' }}</div>
+          <SubjectBadge />
+        </div>
         <div class="hero-sub">
           <span class="day-badge">今天是你的学习第 {{ data?.study_day_count ?? 1 }} 天</span>
           <template v-if="data?.exam">
@@ -212,7 +223,7 @@ onBeforeUnmount(() => {
           class="task-progress"
         />
         <div v-if="taskTotal === 0" class="empty-tasks">
-          今天暂无任务，去和 AI Agent 聊聊，让它为你制定学习计划吧。
+          今天暂时没有任务。去和小助手聊聊，让它帮你排一份学习计划吧。
           <el-button type="primary" link @click="router.push('/agent')">找 Agent 定计划</el-button>
         </div>
         <ul class="task-list">
@@ -343,11 +354,18 @@ onBeforeUnmount(() => {
   background: linear-gradient(135deg, rgba(79, 124, 247, 0.08), rgba(124, 92, 255, 0.08));
 }
 
+.greeting-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
 .greeting {
   font-size: 22px;
   font-weight: 600;
   color: $text-primary;
-  margin-bottom: 10px;
 }
 
 .hero-sub {

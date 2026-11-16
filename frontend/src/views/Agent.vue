@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { ChatLineRound, Promotion, Refresh } from '@element-plus/icons-vue'
 
@@ -42,6 +43,7 @@ interface TraceItem {
   event: TraceEvent
 }
 
+const route = useRoute()
 const messages = reactive<ChatMessage[]>([])
 const traceItems = reactive<TraceItem[]>([])
 const input = ref('')
@@ -136,6 +138,11 @@ function onEvent(event: TraceEvent, placeholder: ChatMessage) {
     case 'retry':
       placeholder.status = `自我循环：第 ${event.attempt} 轮修正中…`
       break
+    case 'delta_reset':
+      // 自我修正：上一轮未通过验证的流式内容需要丢弃
+      placeholder.content = ''
+      placeholder.status = '已丢弃未通过验证的内容，正在重新生成…'
+      break
     case 'delta':
       // 流式输出：逐块追加并即时重渲染，形成打字机效果
       placeholder.content += event.text || ''
@@ -229,6 +236,9 @@ onMounted(async () => {
     team.value = await getTeam()
     workflows.value = await getWorkflows()
   } catch { /* 静默 */ }
+  // 从其他页面带过来的提问（如「学习计划」页的“去生成计划”）
+  const ask = route.query.ask
+  if (typeof ask === 'string' && ask.trim()) input.value = ask.trim()
   loadRuns()
 })
 </script>

@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = ""
     LLM_BASE_URL: str = "https://api.openai.com/v1"
     LLM_MODEL: str = "gpt-4o-mini"
+    # 对话回复使用 token 级流式输出（首字更快）；关闭则回退为整段生成后模拟流式
+    AGENT_STREAM_TOKENS: bool = True
+    # 是否额外调用 LLM 做输出质量评分（每次多一次模型往返，默认关闭，仅用规则校验）
+    AGENT_LLM_VALIDATION: bool = False
 
     # Embedding
     EMBEDDING_API_KEY: str = ""
@@ -49,7 +53,7 @@ class Settings(BaseSettings):
 
     # 文件上传
     UPLOAD_DIR: str = "./data/uploads"
-    MAX_UPLOAD_SIZE_MB: int = 20
+    MAX_UPLOAD_SIZE_MB: int = 100
 
     # 日志
     LOG_LEVEL: str = "INFO"

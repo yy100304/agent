@@ -21,6 +21,8 @@ class StudyPlan(Base, TimestampMixin):
     subject: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
     exam_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     daily_minutes: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    # 计划内容：用户自己写的整段文字（复习范围、目标、注意事项……）
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         String(16), default="active", nullable=False
     )  # active / completed / archived

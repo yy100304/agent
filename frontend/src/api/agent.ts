@@ -36,7 +36,7 @@ export interface RunSummary {
 export interface TraceEvent {
   type:
     | 'status' | 'dispatch' | 'plan' | 'agent_start' | 'tool'
-    | 'validate' | 'retry' | 'delta' | 'final' | 'done' | 'error'
+    | 'validate' | 'retry' | 'delta' | 'delta_reset' | 'final' | 'done' | 'error'
   // 各类型字段（可选）
   text?: string
   label?: string

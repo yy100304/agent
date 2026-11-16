@@ -27,9 +27,11 @@ from app.agents.dispatcher import (
 from app.agents.prompts import NON_LEARNING_REPLY
 from app.agents.registry import ROUTES, agent_registry
 from app.agents.validator import output_validator
+from app.core.config import settings
 from app.core.logging import logger
 from app.models import AgentMessage, AgentRun, User
 from app.rag.knowledge_base import search_knowledge_base
+from app.services.knowledge_doc_service import search_user_documents
 from app.services.llm_service import llm_service
 
 HISTORY_LIMIT = 10  # 注入 LLM 的最近对话轮数
@@ -62,6 +64,7 @@ class WorkflowExecutor:
         self.t0 = 0.0
         self._last_output = ""
         self._last_passed = False
+        self._streamed = False  # 是否已经边生成边推送（避免最后重复流式）
 
     # ============ 主入口 ============
 
@@ -98,7 +101,7 @@ class WorkflowExecutor:
                 final = self._last_output
             else:
                 agent_id = ROUTES[dispatch.label]
-                async for event in self._run_agent_with_loop(ctx, agent_id):
+                async for event in self._run_agent_with_loop(ctx, agent_id, live=True):
                     yield event
                 final = self._last_output
 
@@ -106,9 +109,10 @@ class WorkflowExecutor:
             self._save_message(session_id, user.username, "assistant", final)
             run_id = self._save_run(user, ctx, dispatch, final)
 
-            # ---- 4. 流式输出最终答案（delta 分块，避免一次性整段返回） ----
-            async for event in self._stream_final(final):
-                yield event
+            # ---- 4. 流式输出最终答案（已边生成边推送时不重复） ----
+            if not self._streamed:
+                async for event in self._stream_final(final):
+                    yield event
             # final 事件携带完整内容，供前端幂等确认与历史记录使用
             yield await self._emit({"type": "final", "content": final})
             yield await self._emit({
@@ -126,7 +130,8 @@ class WorkflowExecutor:
     # ============ 单 Agent 执行（含 Self-Loop） ============
 
     async def _run_agent_with_loop(
-        self, ctx: RunContext, agent_id: str, sub_message: Optional[str] = None
+        self, ctx: RunContext, agent_id: str,
+        sub_message: Optional[str] = None, live: bool = False,
     ) -> AsyncIterator[dict]:
         profile = agent_registry.require(agent_id)
         message = sub_message or ctx.message
@@ -138,21 +143,35 @@ class WorkflowExecutor:
                 "name": profile.name, "attempt": attempt,
             })
 
-            # -- 工具阶段：知识库检索（Retrieve-then-Generate） --
+            # -- 工具阶段：知识库检索（内置知识库 + 用户上传资料） --
             tool_context = ""
             if "search_knowledge_base" in profile.tools:
-                hits = search_knowledge_base(message, top_k=3)
-                if hits:
-                    tool_context = "【参考资料】（来自学习知识库检索）\n" + \
-                        "\n---\n".join(h["context"] for h in hits)
-                    yield await self._emit({
-                        "type": "tool", "tool": "search_knowledge_base",
-                        "summary": f"命中 {len(hits)} 篇：" +
-                                   "、".join(h["title"] for h in hits),
-                    })
+                tool_context, tool_event = self._retrieve(ctx, message)
+                if tool_event:
+                    yield await self._emit(tool_event)
 
-            # -- 生成阶段：LLM 优先，降级模板兜底 --
-            output = self._generate(profile, message, ctx.history, tool_context)
+            # -- 生成阶段：流式（首字更快）优先，失败/未配置时降级 --
+            streamed_now = False
+            if live and settings.AGENT_STREAM_TOKENS and llm_service.available:
+                buffer: list[str] = []
+                async for chunk in llm_service.astream_chat(
+                    self._build_messages(profile, message, ctx.history, tool_context),
+                    temperature=profile.temperature,
+                ):
+                    buffer.append(chunk)
+                    yield {"type": "delta", "text": chunk}
+                if buffer:
+                    streamed_now = True
+                    self._streamed = True
+                output = "".join(buffer).strip()
+                if len(output) < 10:  # 流式失败/空 → 模板兜底并补发内容
+                    output = self._fallback_output(profile, message)
+                    if streamed_now:
+                        yield {"type": "delta_reset"}
+                    yield {"type": "delta", "text": output}
+                    self._streamed = True
+            else:
+                output = self._generate(profile, message, ctx.history, tool_context)
 
             # -- 验证阶段 --
             validation = output_validator.validate(profile, output, message)
@@ -165,20 +184,45 @@ class WorkflowExecutor:
                 passed = True
                 break
 
-            # -- Self-Loop：验证不通过 → 注入反馈重试 --
+            # -- Self-Loop：验证不通过 → 丢弃已推送内容并注入反馈重试 --
             if attempt <= profile.max_retries:
                 yield await self._emit({
                     "type": "retry", "agent": agent_id, "attempt": attempt + 1,
                     "feedback": validation.feedback,
                 })
+                if streamed_now:
+                    yield {"type": "delta_reset"}
                 message = (
                     f"{message}\n\n[系统反馈] 上一次输出未通过验证：{validation.feedback}"
                 )
 
         if not passed:
-            output += "\n\n> ⚠️ 该结果未完全通过自动验证，仅供参考。"
+            warning = "\n\n> ⚠️ 该结果未完全通过自动验证，仅供参考。"
+            output += warning
+            if self._streamed:
+                yield {"type": "delta", "text": warning}
         self._last_output = output
         self._last_passed = passed
+
+    def _retrieve(self, ctx: RunContext, message: str) -> tuple[str, Optional[dict]]:
+        """检索内置知识库 + 用户上传资料，返回（参考资料文本, tool 事件）."""
+        builtin = search_knowledge_base(message, top_k=3)
+        mine: list[dict] = []
+        try:
+            mine = search_user_documents(self.db, ctx.user_id, message, top_k=2)
+        except Exception as e:  # 用户资料检索失败不影响主流程
+            logger.warning(f"用户资料检索失败：{e}")
+
+        contexts = [h["context"] for h in builtin] + [h["context"] for h in mine]
+        if not contexts:
+            return "", None
+
+        titles = [h["title"] for h in builtin] + [f"我的资料·{d['title']}" for d in mine]
+        tool_context = "【参考资料】（来自学习知识库检索）\n" + "\n---\n".join(contexts)
+        return tool_context, {
+            "type": "tool", "tool": "search_knowledge_base",
+            "summary": f"命中 {len(contexts)} 篇：" + "、".join(titles),
+        }
 
     # ============ 多任务编排 ============
 
@@ -246,17 +290,24 @@ class WorkflowExecutor:
 
     # ============ 生成（LLM + 降级模板） ============
 
-    def _generate(
-        self, profile: AgentProfile, message: str,
-        history: list[dict], tool_context: str
-    ) -> str:
+    @staticmethod
+    def _build_messages(
+        profile: AgentProfile, message: str,
+        history: list[dict], tool_context: str,
+    ) -> list[dict]:
         system = profile.role_prompt
         if tool_context:
             system += f"\n\n{tool_context}"
         messages = [{"role": "system", "content": system}]
         messages += history[-HISTORY_LIMIT:]
         messages.append({"role": "user", "content": message})
+        return messages
 
+    def _generate(
+        self, profile: AgentProfile, message: str,
+        history: list[dict], tool_context: str
+    ) -> str:
+        messages = self._build_messages(profile, message, history, tool_context)
         output = llm_service.chat(messages, temperature=profile.temperature)
         if output and len(output.strip()) >= 10:
             return output.strip()

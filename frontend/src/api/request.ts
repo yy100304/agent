@@ -1,11 +1,21 @@
 import axios, {
   type AxiosInstance,
+  type AxiosRequestConfig,
   type AxiosResponse,
   type InternalAxiosRequestConfig,
 } from 'axios'
 import { ElMessage } from 'element-plus'
 
 import { clearToken, getToken } from '@/utils/auth'
+
+// 允许调用方索要「原始数据 + 响应头」，用于读取 X-Agent-* 等自定义头
+declare module 'axios' {
+  export interface AxiosRequestConfig {
+    withMeta?: boolean
+    /** 静默请求：失败时不弹全局提示（用于轮询等高频请求） */
+    silent?: boolean
+  }
+}
 
 // 后端统一响应结构（暂未完全统一，先兼容两种形态）
 export interface ApiResponse<T = unknown> {
@@ -33,6 +43,7 @@ instance.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 instance.interceptors.response.use(
   (response: AxiosResponse) => {
     const data = response.data
+    const withMeta = Boolean((response.config as AxiosRequestConfig).withMeta)
     // 后端 FastAPI 默认返回结构就是数据本身；自定义结构 { code, message, data } 也兼容
     if (data && typeof data === 'object' && 'code' in data) {
       const apiData = data as ApiResponse
@@ -40,13 +51,22 @@ instance.interceptors.response.use(
         ElMessage.error(apiData.message || '请求失败')
         return Promise.reject(new Error(apiData.message || '请求失败'))
       }
-      return apiData.data as AxiosResponse
+      return withMeta
+        ? ({ data: apiData.data, headers: response.headers } as unknown as AxiosResponse)
+        : (apiData.data as AxiosResponse)
     }
-    return data
+    return withMeta
+      ? ({ data, headers: response.headers } as unknown as AxiosResponse)
+      : data
   },
   (error) => {
+    // 主动取消（如用户点「取消上传」）不是网络故障，交给调用方处理
+    if (axios.isCancel(error)) {
+      return Promise.reject(error)
+    }
     const status = error?.response?.status
     const detail = error?.response?.data?.detail || error?.response?.data?.message
+    const silent = Boolean((error?.config as AxiosRequestConfig | undefined)?.silent)
 
     if (status === 401) {
       clearToken()
@@ -55,6 +75,8 @@ instance.interceptors.response.use(
       if (window.location.pathname !== '/login') {
         window.location.href = '/login'
       }
+    } else if (silent) {
+      // 调用方自行处理（轮询类请求不打扰用户）
     } else if (status === 403) {
       ElMessage.error('没有访问权限')
     } else if (status === 422) {

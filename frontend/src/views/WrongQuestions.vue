@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 
@@ -11,10 +11,13 @@ import {
   type WrongQuestionStats,
 } from '@/api/wrongQuestions'
 import { getKnowledgePoints, type KnowledgePoint } from '@/api/questions'
+import SubjectBadge from '@/components/SubjectBadge.vue'
 import { usePracticeStore } from '@/stores/practice'
+import { useSubjectStore } from '@/stores/subject'
 
 const router = useRouter()
 const practiceStore = usePracticeStore()
+const subjectStore = useSubjectStore()
 
 const loading = ref(false)
 const items = ref<WrongQuestion[]>([])
@@ -22,11 +25,22 @@ const stats = ref<WrongQuestionStats>({ total: 0, unmastered: 0, reviewing: 0, m
 const knowledgePoints = ref<KnowledgePoint[]>([])
 
 const filter = reactive({
-  subject: 'all',
+  // 默认跟随顶部当前科目
+  subject: subjectStore.current || 'all',
   knowledge_point_id: undefined as number | undefined,
   status: 'all',
   difficulty: 'all',
 })
+
+// 顶部切换科目 → 同步筛选并重载
+watch(
+  () => subjectStore.current,
+  (value) => {
+    filter.subject = value || 'all'
+    filter.knowledge_point_id = undefined
+    onFilterChange()
+  },
+)
 
 // 科目下拉项（从数据推导，保证与实际一致）
 const subjectOptions = computed(() => {
@@ -150,6 +164,7 @@ onMounted(async () => {
     <section class="head card">
       <div class="head-left">
         <h2 class="title">我的错题集</h2>
+        <SubjectBadge />
         <div class="stats">
           <span class="stat">共 <b>{{ stats.total }}</b> 道错题</span>
           <el-divider direction="vertical" />
@@ -283,7 +298,7 @@ onMounted(async () => {
           <p class="detail-text right">{{ current.correct_answer }}</p>
         </div>
         <div class="detail-block">
-          <h4>AI 解析</h4>
+          <h4>小助手解析</h4>
           <p class="detail-text">{{ current.explanation || '暂无解析' }}</p>
         </div>
         <div class="detail-block">
@@ -332,6 +347,18 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.head-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+
+  .title {
+    margin: 0;
+  }
 }
 
 .title {

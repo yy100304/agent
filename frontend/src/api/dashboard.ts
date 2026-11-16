@@ -49,8 +49,10 @@ export interface DashboardSummary {
   agent_suggestion: AgentSuggestion
 }
 
-export function getDashboard() {
-  return request.get<DashboardSummary, DashboardSummary>('/dashboard')
+export function getDashboard(subject?: string) {
+  return request.get<DashboardSummary, DashboardSummary>('/dashboard', {
+    params: subject ? { subject } : undefined,
+  })
 }
 
 export function completeTask(taskId: number) {

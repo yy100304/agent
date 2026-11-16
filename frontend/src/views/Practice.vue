@@ -1,22 +1,27 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 
 import {
-  generateQuestions,
+  generateQuestionsWithMeta,
   getKnowledgePoints,
   submitAnswer,
+  type GenerateMeta,
   type KnowledgePoint,
   type Question,
   type AnswerResult,
 } from '@/api/questions'
+import SubjectBadge from '@/components/SubjectBadge.vue'
 import { usePracticeStore } from '@/stores/practice'
+import { useSubjectStore } from '@/stores/subject'
 
 const practiceStore = usePracticeStore()
+const subjectStore = useSubjectStore()
 
 const loading = ref(false)
 const submitting = ref(false)
 const knowledgePoints = ref<KnowledgePoint[]>([])
+const genMeta = ref<GenerateMeta | null>(null)
 
 const form = reactive({
   knowledge_point_id: undefined as number | undefined,
@@ -26,16 +31,52 @@ const form = reactive({
 interface QuizItem {
   question: Question
   myAnswer: string
+  selected: string[]
   result: AnswerResult | null
 }
 
 const quiz = ref<QuizItem[]>([])
 const quizTitle = ref('')
 
+const LETTERS = ['A', 'B', 'C', 'D', 'E']
+
+const alertType = computed(() => {
+  if (genMeta.value?.status === 'success') return 'success'
+  if (genMeta.value?.status === 'partial') return 'warning'
+  return 'error'
+})
+
+const missingCount = computed(() => {
+  if (!genMeta.value) return 0
+  return Math.max(0, genMeta.value.requestedCount - genMeta.value.actualCount)
+})
+
 const subjectOptions = computed(() => {
   const set = new Set(knowledgePoints.value.map((k) => k.subject))
   return Array.from(set)
 })
+
+// 当前科目下的知识点（顶部切换科目后联动）
+const subjectKps = computed(() => {
+  const current = subjectStore.current
+  if (!current) return knowledgePoints.value
+  return knowledgePoints.value.filter((k) => k.subject === current)
+})
+
+watch(subjectKps, (list) => {
+  if (!list.some((k) => k.id === form.knowledge_point_id)) {
+    form.knowledge_point_id = list[0]?.id
+  }
+})
+
+watch(
+  () => subjectStore.current,
+  () => {
+    quiz.value = []
+    genMeta.value = null
+    quizTitle.value = ''
+  },
+)
 
 const difficultyText: Record<string, string> = {
   easy: '简单',
@@ -44,6 +85,7 @@ const difficultyText: Record<string, string> = {
 }
 const typeText: Record<string, string> = {
   single_choice: '单选题',
+  multiple_choice: '多选题',
   true_false: '判断题',
   short_answer: '简答题',
 }
@@ -58,37 +100,70 @@ const allAnswered = computed(
 
 async function onGenerate() {
   if (!form.knowledge_point_id) {
-    ElMessage.warning('请先选择知识点')
+    ElMessage.warning('先选个知识点吧')
     return
   }
   loading.value = true
+  genMeta.value = null
   try {
-    const questions = await generateQuestions({
+    const { questions, meta } = await generateQuestionsWithMeta({
       knowledge_point_id: form.knowledge_point_id,
       count: form.count,
     })
+    genMeta.value = meta
+
     if (!questions.length) {
-      ElMessage.warning('未能生成题目，请稍后再试')
+      quiz.value = []
+      quizTitle.value = ''
+      ElMessage.warning(meta.reason || '未能生成题目，请稍后再试')
       return
     }
     const kp = knowledgePoints.value.find((k) => k.id === form.knowledge_point_id)
     quizTitle.value = `${kp?.name ?? '练习'} · ${questions.length} 道题`
-    quiz.value = questions.map((q) => ({ question: q, myAnswer: '', result: null }))
+    quiz.value = questions.map((q) => ({
+      question: q,
+      myAnswer: '',
+      selected: [],
+      result: null,
+    }))
   } catch (e) {
     console.error(e)
+    const detail = (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+    genMeta.value = {
+      status: 'failed',
+      requestedCount: form.count,
+      actualCount: 0,
+      attempts: 0,
+      fallbackCount: 0,
+      reason: typeof detail === 'string' ? detail : '生成失败，请稍后再试',
+    }
+    quiz.value = []
+    quizTitle.value = ''
   } finally {
     loading.value = false
   }
 }
 
+function buildAnswer(item: QuizItem): string {
+  if (item.question.question_type === 'multiple_choice') {
+    return [...item.selected].sort().join('')
+  }
+  return item.myAnswer.trim()
+}
+
 async function onSubmit(item: QuizItem) {
-  if (!item.myAnswer.trim()) {
-    ElMessage.warning('请先填写答案')
+  const answer = buildAnswer(item)
+  if (!answer) {
+    ElMessage.warning(
+      item.question.question_type === 'multiple_choice'
+        ? '请至少选择一个选项'
+        : '请先填写答案'
+    )
     return
   }
   submitting.value = true
   try {
-    item.result = await submitAnswer(item.question.id, item.myAnswer.trim())
+    item.result = await submitAnswer(item.question.id, answer)
   } catch (e) {
     console.error(e)
   } finally {
@@ -99,12 +174,14 @@ async function onSubmit(item: QuizItem) {
 function retry(item: QuizItem) {
   item.result = null
   item.myAnswer = ''
+  item.selected = []
 }
 
 function onRetryAll() {
   quiz.value.forEach((q) => {
     q.result = null
     q.myAnswer = ''
+    q.selected = []
   })
 }
 
@@ -114,6 +191,7 @@ onMounted(async () => {
     quiz.value = practiceStore.presetQuestions.map((q) => ({
       question: q,
       myAnswer: '',
+      selected: [],
       result: null,
     }))
     quizTitle.value = practiceStore.presetTitle
@@ -121,8 +199,8 @@ onMounted(async () => {
   }
   try {
     knowledgePoints.value = await getKnowledgePoints()
-    if (!form.knowledge_point_id && knowledgePoints.value.length) {
-      form.knowledge_point_id = knowledgePoints.value[0].id
+    if (!form.knowledge_point_id && subjectKps.value.length) {
+      form.knowledge_point_id = subjectKps.value[0].id
     }
   } catch (e) {
     console.error(e)
@@ -135,17 +213,18 @@ onMounted(async () => {
     <!-- ===== 生成区 ===== -->
     <section class="card gen-card">
       <div class="gen-title">
-        <h3>AI 出题</h3>
-        <span class="gen-hint">题目难度会根据你的知识点掌握度自动调整</span>
+        <h3>小助手出题</h3>
+        <SubjectBadge />
+        <span class="gen-hint">小助手会看着你的掌握度挑难度，薄弱的地方多练几道</span>
       </div>
       <div class="gen-form">
         <el-select
           v-model="form.knowledge_point_id"
-          placeholder="选择知识点"
+          placeholder="想练哪个知识点"
           style="width: 200px"
         >
           <el-option
-            v-for="k in knowledgePoints"
+            v-for="k in subjectKps"
             :key="k.id"
             :label="`${k.subject} · ${k.name}`"
             :value="k.id"
@@ -157,10 +236,41 @@ onMounted(async () => {
           <el-option :value="10" label="10 道题" />
         </el-select>
         <el-button type="primary" :loading="loading" @click="onGenerate">
-          生成练习
+          {{ loading ? '小助手正在出题…' : '让小助手出题' }}
         </el-button>
       </div>
+      <p v-if="loading" class="gen-loading">
+        正在挑题、编排难度，通常 10 秒内就好，稍等一下～
+      </p>
     </section>
+
+    <!-- ===== 生成结果提示（success / partial / failed）===== -->
+    <el-alert
+      v-if="genMeta"
+      class="gen-alert"
+      :type="alertType"
+      :closable="true"
+      show-icon
+      @close="genMeta = null"
+    >
+      <template #title>
+        <span v-if="genMeta.status === 'success'">
+          出好了：{{ genMeta.actualCount }} 道题<template v-if="genMeta.fallbackCount">（其中 {{ genMeta.fallbackCount }} 道是从题库里挑的）</template>，开始练吧
+        </span>
+        <span v-else-if="genMeta.status === 'partial'">
+          先凑到 {{ genMeta.actualCount }}/{{ genMeta.requestedCount }} 道，还差 {{ missingCount }} 道
+        </span>
+        <span v-else>
+          这次没出成，换个知识点或者稍后再试试
+        </span>
+      </template>
+      <div
+        v-if="genMeta.reason && genMeta.status !== 'success'"
+        class="alert-reason"
+      >
+        {{ genMeta.status === 'partial' ? '原因：' : '' }}{{ genMeta.reason }}
+      </div>
+    </el-alert>
 
     <!-- ===== 做题区 ===== -->
     <template v-if="quiz.length">
@@ -191,7 +301,7 @@ onMounted(async () => {
               {{ difficultyText[item.question.difficulty] }}
             </el-tag>
             <el-tag v-if="item.question.source === 'ai'" size="small" type="warning" effect="plain">
-              AI 生成
+              小助手出品
             </el-tag>
           </div>
         </div>
@@ -214,6 +324,23 @@ onMounted(async () => {
             {{ ['A', 'B', 'C', 'D', 'E'][i] }}. {{ opt }}
           </el-radio>
         </el-radio-group>
+
+        <!-- 多选题 -->
+        <el-checkbox-group
+          v-else-if="item.question.question_type === 'multiple_choice'"
+          v-model="item.selected"
+          class="q-options"
+          :disabled="!!item.result"
+        >
+          <el-checkbox
+            v-for="(opt, i) in item.question.options || []"
+            :key="i"
+            :value="LETTERS[i]"
+            class="q-option"
+          >
+            {{ LETTERS[i] }}. {{ opt }}
+          </el-checkbox>
+        </el-checkbox-group>
 
         <!-- 判断题 -->
         <el-radio-group
@@ -265,7 +392,7 @@ onMounted(async () => {
       </article>
     </template>
 
-    <el-empty v-else-if="!loading" description="选择知识点，让 AI 为你出一组练习题" />
+    <el-empty v-else-if="!loading" description="挑个知识点，小助手马上给你出几道题" />
   </div>
 </template>
 
@@ -309,9 +436,27 @@ onMounted(async () => {
   color: $text-placeholder;
 }
 
+.gen-loading {
+  flex-basis: 100%;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: $primary;
+}
+
 .gen-form {
   display: flex;
   gap: $gap-sm;
+}
+
+.gen-alert {
+  padding: 10px 14px;
+}
+
+.alert-reason {
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.6;
+  opacity: 0.85;
 }
 
 .quiz-head {

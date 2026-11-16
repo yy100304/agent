@@ -54,6 +54,32 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def _migrate_schema() -> None:
+    """轻量迁移：补齐历史库缺失的列（项目未引入 Alembic）."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+
+    # 资料原始文件路径
+    if "knowledge_documents" in tables:
+        columns = {col["name"] for col in inspector.get_columns("knowledge_documents")}
+        if "stored_path" not in columns:
+            with engine.begin() as conn:
+                conn.execute(
+                    text("ALTER TABLE knowledge_documents ADD COLUMN stored_path VARCHAR(512)")
+                )
+            logger.info("数据库迁移：knowledge_documents 增加 stored_path 列")
+
+    # 计划的「内容」：用户自己写的整段说明（任务仍是逐条记录）
+    if "study_plans" in tables:
+        columns = {col["name"] for col in inspector.get_columns("study_plans")}
+        if "description" not in columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE study_plans ADD COLUMN description TEXT"))
+            logger.info("数据库迁移：study_plans 增加 description 列")
+
+
 def init_db() -> None:
     """创建所有表（开发阶段使用）."""
     # 确保导入所有模型以便 Base.metadata 能感知到
@@ -61,6 +87,7 @@ def init_db() -> None:
 
     logger.info("开始初始化数据库表结构...")
     Base.metadata.create_all(bind=engine)
+    _migrate_schema()
     logger.info("数据库表结构初始化完成")
 
 

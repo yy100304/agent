@@ -45,12 +45,21 @@ def create_app() -> FastAPI:
     )
 
     # CORS
+    # 注意：自定义响应头必须通过 expose_headers 暴露，浏览器端 Axios 才能读取
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=[
+            "X-Agent-Status",
+            "X-Requested-Count",
+            "X-Actual-Count",
+            "X-Agent-Attempts",
+            "X-Agent-Fallback",
+            "X-Agent-Reason",
+        ],
     )
 
     # 全局异常处理
@@ -87,6 +96,14 @@ def create_app() -> FastAPI:
 
     # 业务路由
     app.include_router(api_router, prefix="/api")
+
+    # 专业 Agent 注册（统一注册表，供主控 Agent / 工作流按名调度）
+    try:
+        from app.agents.registration import register_core_agents
+
+        logger.info(f"已注册专业 Agent：{register_core_agents()}")
+    except Exception as e:  # 注册失败不阻塞服务启动
+        logger.exception(f"专业 Agent 注册失败：{e}")
 
     return app
 

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database.base import Base
 
 # 题目类型
-QUESTION_TYPES = ("single_choice", "true_false", "short_answer")
+QUESTION_TYPES = ("single_choice", "multiple_choice", "true_false", "short_answer")
 # 难度
 DIFFICULTIES = ("easy", "medium", "hard")
 

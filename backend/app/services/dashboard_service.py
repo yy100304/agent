@@ -26,9 +26,13 @@ class DashboardService:
         self.db = db
         self.learning = LearningService(db)
 
-    def build_summary(self, user: User) -> dict:
+    def build_summary(self, user: User, subject: Optional[str] = None) -> dict:
         today = date.today()
         now = datetime.now()
+        # 科目过滤只作用于「计划相关」内容，学习时长/正确率等仍为用户全局指标
+        subject_filter = (subject or "").strip()
+        if subject_filter in ("", "all", "全部"):
+            subject_filter = ""
 
         # ---- 学习第 N 天 ----
         created = user.created_at.date() if user.created_at else today
@@ -36,16 +40,14 @@ class DashboardService:
 
         # ---- 考试倒计时（最近的进行中计划）----
         exam = None
-        plan = (
-            self.db.query(StudyPlan)
-            .filter(
-                StudyPlan.user_id == user.id,
-                StudyPlan.status == "active",
-                StudyPlan.exam_date >= today,
-            )
-            .order_by(StudyPlan.exam_date.asc())
-            .first()
+        plan_query = self.db.query(StudyPlan).filter(
+            StudyPlan.user_id == user.id,
+            StudyPlan.status == "active",
+            StudyPlan.exam_date >= today,
         )
+        if subject_filter:
+            plan_query = plan_query.filter(StudyPlan.subject == subject_filter)
+        plan = plan_query.order_by(StudyPlan.exam_date.asc()).first()
         if plan and plan.exam_date:
             exam = {
                 "plan_id": plan.id,
@@ -56,7 +58,7 @@ class DashboardService:
             }
 
         # ---- 今日任务 ----
-        task_rows = (
+        task_query = (
             self.db.query(StudyTask, KnowledgePoint)
             .outerjoin(KnowledgePoint, StudyTask.knowledge_point_id == KnowledgePoint.id)
             .join(StudyPlan, StudyTask.plan_id == StudyPlan.id)
@@ -64,9 +66,12 @@ class DashboardService:
                 StudyPlan.user_id == user.id,
                 StudyTask.scheduled_date == today,
             )
-            .order_by(StudyTask.completed.asc(), StudyTask.id.asc())
-            .all()
         )
+        if subject_filter:
+            task_query = task_query.filter(StudyPlan.subject == subject_filter)
+        task_rows = task_query.order_by(
+            StudyTask.completed.asc(), StudyTask.id.asc()
+        ).all()
         today_tasks = [
             {
                 "id": t.id,

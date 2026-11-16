@@ -65,11 +65,20 @@ def main() -> None:
     check("讲解-完成事件", "done" in types and done.get("run_id") > 0,
           f"(latency={done.get('latency_ms')}ms)")
 
-    # 流式输出：delta 事件存在且拼接结果与 final 完整内容一致
+    # 流式输出：delta 事件存在，且「最后一次 delta_reset 之后」的拼接结果与 final 一致
+    # （Self-Loop 重试时会先推送 delta_reset 丢弃未通过验证的内容）
     deltas = [e for e in ev if e["type"] == "delta"]
-    streamed = "".join(e.get("text", "") for e in deltas)
+    streamed_parts: list[str] = []
+    resets = 0
+    for item in ev:
+        if item["type"] == "delta":
+            streamed_parts.append(item.get("text", ""))
+        elif item["type"] == "delta_reset":
+            streamed_parts.clear()
+            resets += 1
+    streamed = "".join(streamed_parts)
     check("讲解-流式delta输出", len(deltas) >= 3,
-          f"(共 {len(deltas)} 个分块)")
+          f"(共 {len(deltas)} 个分块，reset {resets} 次)")
     check("讲解-流式内容完整性", streamed == final.get("content", ""),
           f"(delta {len(streamed)} 字符 == final {len(final.get('content', ''))} 字符)")
 

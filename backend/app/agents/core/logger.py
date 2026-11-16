@@ -85,6 +85,24 @@ class ExecutionLogger:
         """清空内存日志（复用 logger 实例时使用）."""
         self.entries.clear()
 
+    def clear_task(self, task_id_prefix: str) -> int:
+        """按 task_id 前缀精确清理内存日志（工作流结束后调用）.
+
+        只删除本任务（含其子步骤 task_id：`{master}-{order}`）的条目，
+        并发执行的其他任务日志不受影响；数据库中的正式记录不会被删除。
+        返回清理条数。
+        """
+        if not task_id_prefix:
+            return 0
+        kept = [
+            entry for entry in self.entries
+            if not str(entry.task_id).startswith(task_id_prefix)
+        ]
+        removed = len(self.entries) - len(kept)
+        if removed:
+            self.entries[:] = kept
+        return removed
+
     def count(self, level: Optional[str] = None) -> int:
         if level is None:
             return len(self.entries)

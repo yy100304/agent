@@ -41,8 +41,11 @@ class QuestionDetail(QuestionOut):
 class GenerateQuestionsRequest(BaseModel):
     knowledge_point_id: Optional[int] = None
     subject: Optional[str] = None
+    knowledge_point: Optional[str] = None       # 兼容按名称指定知识点
     count: int = Field(default=5, ge=1, le=20)
-    difficulty: Optional[str] = None  # 不传则根据掌握度动态决定
+    difficulty: Optional[str] = None            # 不传则根据掌握度动态决定
+    question_types: Optional[List[str]] = None  # 不传则四种题型混合
+    use_weak_points: Optional[bool] = None      # 不传则默认结合薄弱知识点
 
 
 class AnswerRequest(BaseModel):

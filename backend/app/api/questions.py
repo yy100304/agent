@@ -1,8 +1,11 @@
 """练习 / 题目 / 答题 API."""
+import asyncio
 import json
+import uuid
 from typing import List, Optional
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_active_user
@@ -40,30 +43,50 @@ def _to_out(q: Question) -> QuestionOut:
 @router.post("/generate", response_model=List[QuestionOut])
 def generate_questions(
     payload: GenerateQuestionsRequest,
+    response: Response,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ) -> List[QuestionOut]:
-    """AI 生成练习题（LLM 不可用时自动降级为内置题库）."""
-    service = QuestionService(db)
+    """AI 生成练习题（统一走第六阶段练习生成 Agent）.
 
-    # 根据掌握度动态决定难度
+    兼容原有调用方式：路径、请求体（新增字段全部可选）、响应体仍是题目列表。
+    Agent 的执行状态通过响应头回传，便于前端区分 success / partial / failed：
+      X-Agent-Status / X-Requested-Count / X-Actual-Count /
+      X-Agent-Attempts / X-Agent-Fallback
+    """
+    # 根据掌握度动态决定难度（保留原有行为）
     mastery_hint = None
     if payload.knowledge_point_id:
         learning = LearningService(db)
         profile = learning.get_or_create_profile(current_user.id, payload.knowledge_point_id)
         mastery_hint = profile.mastery_score if profile.confidence > 0 else None
 
+    from app.agents.core import AgentContext, AgentTask
+    from app.agents.core.registry import core_registry
+    from app.agents.question_generation_agent import QuestionGenerationAgent
+
+    agent = core_registry.get("question_generation") or QuestionGenerationAgent()
+    task = AgentTask(
+        task_id=str(uuid.uuid4()),
+        user_id=current_user.id,
+        task_type="question_generation",
+        input_data={
+            "count": payload.count,
+            "knowledge_point_id": payload.knowledge_point_id,
+            "knowledge_point": payload.knowledge_point,
+            "subject": payload.subject,
+            "difficulty": payload.difficulty,
+            "question_types": payload.question_types,
+            "use_weak_points": payload.use_weak_points,
+            "mastery_hint": mastery_hint,
+        },
+    )
+    ctx = AgentContext(
+        user_id=current_user.id, username=current_user.username, db=db
+    )
+
     try:
-        questions = service.generate(
-            user=current_user,
-            knowledge_point_id=payload.knowledge_point_id,
-            subject=payload.subject,
-            count=payload.count,
-            difficulty=payload.difficulty,
-            mastery_hint=mastery_hint,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+        result = asyncio.run(agent.run(task, ctx))
     except Exception as e:
         logger.exception(f"生成题目失败：{e}")
         raise HTTPException(
@@ -71,7 +94,35 @@ def generate_questions(
             detail="题目生成失败，请稍后再试",
         )
 
-    return [_to_out(q) for q in questions]
+    if not result.success or not isinstance(result.result, dict):
+        logger.error(f"练习生成 Agent 执行失败：{result.error}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="题目生成失败，请稍后再试",
+        )
+
+    data = result.result
+    agent_status = str(data.get("status") or "failed")
+    response.headers["X-Agent-Status"] = agent_status
+    response.headers["X-Requested-Count"] = str(data.get("requested_count", payload.count))
+    response.headers["X-Actual-Count"] = str(data.get("actual_count", 0))
+    response.headers["X-Agent-Attempts"] = str(data.get("attempts", 0))
+    response.headers["X-Agent-Fallback"] = str(int(data.get("fallback_count", 0)))
+    # 失败/部分成功原因（中文需 URL 编码，HTTP 头只允许 ASCII）
+    response.headers["X-Agent-Reason"] = quote(str(data.get("reason") or ""))[:600]
+
+    ids = [int(i) for i in (data.get("question_ids") or [])]
+    if not ids:
+        # 与旧接口一致：未生成任何题目时按 400 返回明确原因
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=data.get("reason") or "未生成有效题目，请稍后再试",
+        )
+
+    rows = db.query(Question).filter(Question.id.in_(ids)).all()
+    order = {qid: idx for idx, qid in enumerate(ids)}
+    rows.sort(key=lambda q: order.get(q.id, len(order)))
+    return [_to_out(q) for q in rows]
 
 
 @router.post("/{question_id}/answer", response_model=AnswerResult)

@@ -33,12 +33,18 @@ const routes: RouteRecordRaw[] = [
         path: 'agent',
         name: 'Agent',
         component: () => import('@/views/Agent.vue'),
-        meta: { title: 'AI Agent', icon: 'ChatLineRound' },
+        meta: { title: '学习小助手', icon: 'ChatLineRound' },
+      },
+      {
+        path: 'agent-tasks',
+        name: 'AgentTasks',
+        component: () => import('@/views/AgentTasks.vue'),
+        meta: { title: '任务轨迹', icon: 'List' },
       },
       {
         path: 'study-plan',
         name: 'StudyPlan',
-        component: () => import('@/views/Placeholder.vue'),
+        component: () => import('@/views/StudyPlan.vue'),
         meta: { title: '学习计划', icon: 'Calendar' },
       },
       {
@@ -56,7 +62,7 @@ const routes: RouteRecordRaw[] = [
       {
         path: 'knowledge-base',
         name: 'KnowledgeBase',
-        component: () => import('@/views/Placeholder.vue'),
+        component: () => import('@/views/KnowledgeBase.vue'),
         meta: { title: '知识库', icon: 'Files' },
       },
     ],

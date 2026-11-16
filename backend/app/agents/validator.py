@@ -4,6 +4,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from app.agents.base import AgentProfile, ValidationResult
+from app.core.config import settings
 from app.services.llm_service import llm_service
 
 
@@ -51,8 +52,8 @@ class OutputValidator:
             )
             return ValidationResult(passed=False, score=None, feedback=feedback, checks=checks)
 
-        # ---- LLM 层（可选）----
-        if llm_service.available:
+        # ---- LLM 层（可选，默认关闭以降低单次对话延迟）----
+        if settings.AGENT_LLM_VALIDATION and llm_service.available:
             llm_result = self._llm_score(profile, output, message)
             if llm_result is not None:
                 score, feedback = llm_result
