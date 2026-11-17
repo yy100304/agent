@@ -38,23 +38,7 @@
 
 ## 快速开始
 
-### 方式一：Docker 一条命令（推荐，前后端同一个端口）
-
-```bash
-git clone https://github.com/yy100304/agent.git
-cd agent
-
-docker build -t studyflow-agent .
-docker run -d --name studyflow -p 8000:8000 \
-  -e SECRET_KEY="$(python -c 'import secrets;print(secrets.token_urlsafe(48))')" \
-  -v "$PWD/data:/app/backend/data" \
-  studyflow-agent
-```
-
-打开 <http://localhost:8000> 即可（后端同时托管前端页面与 `/api`）。
-需要 AI 能力时追加 `-e LLM_API_KEY=sk-xxx -e LLM_BASE_URL=https://api.deepseek.com/v1 -e LLM_MODEL=deepseek-chat`。
-
-### 方式二：本地开发（前后端分离 + 热更新）
+### 本地开发（前后端分离 + 热更新）
 
 ```bash
 # 后端
@@ -75,62 +59,14 @@ npm run dev                     # http://localhost:5173（/api 由 Vite 代理�
 
 Windows 也可直接双击 `start-dev.bat` 一键拉起前后端。
 
-## 部署到公网（让任何人都能打开链接使用）
-
-镜像自带前端构建产物，**一个容器 = 一个网址**，无需再单独部署静态站点。
-
-### 1. 云托管 / 容器平台（最省事）
-
-| 平台 | 步骤 |
-|---|---|
-| 腾讯云 CloudBase 云托管 / 阿里云 SAE | 选「容器镜像」→ 关联 GitHub 仓库（自动按 `Dockerfile` 构建）→ 端口填 `8000` → 加环境变量 |
-| Render / Railway / Fly.io | 新建 Web Service → 连接仓库 → 平台识别 `Dockerfile` → 设置环境变量与持久盘（挂到 `/app/backend/data`） |
-| 任意云服务器 | `docker run -d -p 80:8000 --restart=always ...`，前面套 Nginx + HTTPS |
-
-必填环境变量：
-
-```env
-SECRET_KEY=<随机长串>
-APP_ENV=production
-DEBUG=false
-LLM_API_KEY=<你的 key，可留空>
-LLM_BASE_URL=https://api.deepseek.com/v1
-LLM_MODEL=deepseek-chat
-CORS_ORIGINS=["https://你的域名"]      # 同源部署可省略
-```
-
-> **数据持久化**：SQLite 库、上传文件、日志都在 `/app/backend/data`，平台若提供磁盘请挂载到该目录；
-> 没有持久盘时数据会在重启后恢复到初始演示状态（体验不受影响）。
-> 也可把 `DATABASE_URL` 指向 MySQL / PostgreSQL 等外部数据库。
-
-### 2. 反向代理示例（自有服务器）
-
-```nginx
-server {
-    listen 80;
-    server_name study.example.com;
-    client_max_body_size 120M;          # 知识库上传上限
-    location / {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 300s;        # Agent 生成较慢
-    }
-}
-```
-
-`docker run` 时不要漏 `--proxy-headers`（Dockerfile 已内置）。
-
 ## 环境变量
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `APP_ENV` / `DEBUG` | `development` / `True` | 生产请设为 `production` / `false` |
-| `SECRET_KEY` | 占位值 | JWT 签名密钥，**公网部署必须改** |
+| `APP_ENV` / `DEBUG` | `development` / `True` | 开发/调试开关 |
+| `SECRET_KEY` | 占位值 | JWT 签名密钥，建议本地也换成随机串 |
 | `DATABASE_URL` | `sqlite:///../data/studyflow.db` | 支持任意 SQLAlchemy URL |
-| `FRONTEND_DIST` | 自动探测 `frontend/dist` | 前端产物目录 |
-| `CORS_ORIGINS` | `localhost:5173` | JSON 数组；同源部署无需配置 |
+| `CORS_ORIGINS` | `localhost:5173` | 允许跨域的前端地址（JSON 数组） |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | 空 / OpenAI | 留空则走内置题库与规则讲解 |
 | `AGENT_STREAM_TOKENS` | `true` | token 级流式输出（首字更快） |
 | `AGENT_LLM_VALIDATION` | `false` | 是否额外用 LLM 做结果评分 |
@@ -149,14 +85,13 @@ agent/
 │   │   ├── models/       # SQLAlchemy 模型
 │   │   ├── schemas/      # Pydantic 模型
 │   │   ├── services/     # 业务服务（题库、学习记录、资料解析…）
-│   │   └── main.py       # FastAPI 入口（含前端静态托管）
+│   │   └── main.py       # FastAPI 入口
 │   ├── requirements.txt
 │   ├── run.py            # 本地启动
 │   └── seed_demo.py      # 演示数据
 ├── frontend/
 │   └── src/{api,components,router,stores,styles,views}
 ├── docs/                 # 架构说明与更新记录
-├── Dockerfile            # 单镜像：构建前端 + 运行后端
 └── README.md
 ```
 
