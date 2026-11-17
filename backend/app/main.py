@@ -1,11 +1,13 @@
 """FastAPI 应用入口."""
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api import api_router
 from app.core.config import settings
@@ -34,6 +36,39 @@ async def lifespan(app: FastAPI):
     logger.info(f"关闭 {settings.APP_NAME}")
 
 
+def _mount_frontend(app: FastAPI) -> None:
+    """把前端构建产物挂到同一服务（单域名部署：页面与 API 同源）."""
+    raw = os.getenv("FRONTEND_DIST", "").strip()
+    dist = (
+        Path(raw).expanduser().resolve()
+        if raw
+        else (Path(__file__).resolve().parent.parent.parent / "frontend" / "dist")
+    )
+    if not (dist / "index.html").is_file():
+        logger.info("未找到前端构建产物，跳过静态托管（开发模式请使用 Vite dev server）")
+        return
+
+    assets = dist / "assets"
+    if assets.is_dir():
+        app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
+
+    @app.get("/", include_in_schema=False)
+    async def index() -> FileResponse:
+        return FileResponse(dist / "index.html")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        """前端路由交给 SPA；接口/文档路径不吞，保持 404."""
+        if full_path.startswith(("api/", "docs", "redoc", "openapi.json")):
+            return JSONResponse(status_code=404, content={"detail": "Not Found"})
+        candidate = (dist / full_path).resolve()
+        if dist in candidate.parents and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(dist / "index.html")
+
+    logger.info(f"已挂载前端静态资源：{dist}")
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.APP_NAME,
@@ -46,10 +81,13 @@ def create_app() -> FastAPI:
 
     # CORS
     # 注意：自定义响应头必须通过 expose_headers 暴露，浏览器端 Axios 才能读取
+    # 鉴权走 Authorization 头（非 Cookie），因此允许 "*" 时关闭 credentials 才合法
+    origins = list(settings.CORS_ORIGINS)
+    wildcard = "*" in origins
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.CORS_ORIGINS,
-        allow_credentials=True,
+        allow_origins=["*"] if wildcard else origins,
+        allow_credentials=not wildcard,
         allow_methods=["*"],
         allow_headers=["*"],
         expose_headers=[
@@ -96,6 +134,9 @@ def create_app() -> FastAPI:
 
     # 业务路由
     app.include_router(api_router, prefix="/api")
+
+    # 前端静态资源（单服务部署：一个域名同时提供页面与 API）
+    _mount_frontend(app)
 
     # 专业 Agent 注册（统一注册表，供主控 Agent / 工作流按名调度）
     try:

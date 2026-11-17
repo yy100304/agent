@@ -25,9 +25,12 @@ dist/
 
 # Database
 *.db
+*.db.bak
+*.bak
 *.sqlite
 *.sqlite3
 data/*.db
+data/*.bak
 
 # IDE
 .idea/
@@ -39,6 +42,9 @@ data/*.db
 build/
 dist/
 *.egg
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
 
 # Uploads
 data/uploads/*
